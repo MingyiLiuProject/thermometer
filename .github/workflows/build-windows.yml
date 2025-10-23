@@ -1,0 +1,72 @@
+name: Build Windows EXE (PyInstaller)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.13"]   # 你也可以改成 "3.13" 等
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip setuptools wheel
+          if (Test-Path requirements.txt) {
+            python -m pip install -r requirements.txt
+          }
+          # 必需：打包工具 + 你的关键依赖（bleak/matplotlib）
+          python -m pip install -U pyinstaller bleak bleak-winrt winsdk matplotlib
+
+      - name: Clean previous builds
+        shell: pwsh
+        run: |
+          if (Test-Path build) { Remove-Item build -Recurse -Force }
+          if (Test-Path dist) { Remove-Item dist -Recurse -Force }
+          Get-ChildItem -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path *.spec) { Remove-Item *.spec -Force }
+
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          $Main = "${{ env.MAIN_FILE }}"
+          if (-not $Main) { $Main = "main.py" }           # 主脚本默认 main.py
+          $Icon = "${{ env.ICON_FILE }}"
+          if (-not $Icon) { $Icon = "thremo.ico" }           # 图标默认 app.ico（可改）
+
+          pyinstaller --clean -F -w -i $Icon $Main `
+            --collect-all bleak `
+            --collect-all bleak_winrt `
+            --collect-all winsdk `
+            --hidden-import=bleak.backends.winrt `
+            --hidden-import=bleak.backends.dotnet
+
+      - name: Upload artifact (EXE)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-windows-${{ matrix.python-version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
